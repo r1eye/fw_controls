@@ -4,58 +4,75 @@ import RPi.GPIO as GPIO
 import time
 
 
-def mandrel(m_step_channel, m_freq):
-    """
-        Important Note: Thread contents (such as PWM)only
-        execute while the function is being used, ie stuck
-        in a loop.
+stepper_resolution = 200 # Steps per revolution
+wrap_angle = 70 # Degrees
+
+
+class Mandrel():
+    step_channel = 12
+    radius = 1.75 # Inches
+    
+    def __init__(self, c):
+        self.freq = c.freq*tan(wrap_angle*3.14159/180)/(2*3.14159*c.pulley_pitch*c.pulley_teeth) # Equation 2
+    
+    def start(self):
+        """
+            This function is ran on the t1 thread.
+            Its purpose is to spin the mandrel at a calculated
+            angular velocity according to the equation 2 while
+            the carriage function is executing. After which point
+            the both motors will stop.
+        """
+        step = GPIO.PWM(self.step_channel, self.freq)
+        step.start(50)
+        while True:
+            pass
+
+class Carriage():
+    velocity = 1 # Inches per second
+    distance = 5 # Inches
+    step_channel = 16
+    dir_channel = 18
+    limit_switch_channel = 22
+    pulley_teeth = 12
+    pulley_pitch = 0.2 # Inches
+    freq = velocity*stepper_resolution*pulley_pitch*pulley_teeth # Equation 1
+    
+    def home(self):
+        home_step = GPIO.PWM(self.step_channel, 60)
+        while GPIO.input(self.limit_switch_channel) != 1:
+            pass
+        time.sleep(0.4) # debouncing button
+        GPIO.output(self.dir_channel, 1)
+        home_step.start(50)
+        while GPIO.input(self.limit_switch_channel) != 1:
+            pass
+        GPIO.output(self.dir_channel, 0)
+        time.sleep(0.1) # to move carriage away from limit switch
+        home_step.stop()
+        time.sleep (0.4) # debouncing button
+        while GPIO.input(self.limit_switch_channel) != 1:
+            pass
+
+    def start(self):
+        """
+            This function is ran on the t2 thread.
+            Its purpose is to give pulses to the carriages motor
+            driver at a constant frequency as to translate the
+            the mandrel horizontally at a constant velocity, then,
+            after a certain amount of time, translate it in reverse.
+        """
+        step = GPIO.PWM(self.step_channel, self.freq)
+        passes = 0; # The number of passes the carriage does
+        passes_total = 50 # Total number of passes *** NEED TO PUT MATH HERE ***
+        delay = 83.333*self.distance/self.freq # Time it takes to travel one pass
+        step.start(50)
+        while passes < passes_total:
+            GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
+            time.sleep(delay)
+            passes = passes + 1
+        step.stop()
         
-        Need to get carriage to terminate this when it is
-        finished executing
-    """
-    m_step = GPIO.PWM(m_step_channel, m_freq)
-    m_step.start(50)
-    while True:
-        pass
-
-def carriage(c_step_channel, c_dir_channel, c_freq, c_distance):
-    """
-	This function is ran on the t2 thread.
-	Its purpose is to give pulses to the carriages motor
-	driver at a constant frequency as to translate the
-	the mandrel horizontally at a constant velocity, then,
-	after a certain amount of time, translate it in reverse.
-    """
-    c_step = GPIO.PWM(c_step_channel, c_freq)
-    c_pass = 0; # the number of passes the carriage does
-    c_step.start(50) # 50% duty cycle
-    while c_pass < 50:
-        GPIO.output(c_dir_channel, c_pass%2) # c_pass%2 to change direction
-        delay = 83.333*c_distance/c_freq
-        time.sleep(delay)
-        c_pass = c_pass + 1
-    c_step.stop()
-
-
-def home(c_step_channel, c_dir_channel, c_limit_switch_channel):
-    """
-        
-    """
-    home_step = GPIO.PWM(c_step_channel, 60)
-    while GPIO.input(c_limit_switch_channel) != 1:
-        pass
-    time.sleep(0.4) # debouncing button
-    GPIO.output(c_dir_channel, 1)
-    home_step.start(50)
-    while GPIO.input(c_limit_switch_channel) != 1:
-        pass
-    GPIO.output(c_dir_channel, 0)
-    time.sleep(0.1) # to move carriage away from limit switch
-    home_step.stop()
-    time.sleep (0.4) # debouncing button
-    while GPIO.input(c_limit_switch_channel) != 1:
-        pass
-
 
 def main():
 
@@ -68,46 +85,26 @@ def main():
             revolution
 		
     """
-    ### Variable Input Parameters ###
-    c_velocity = 1 # Inches per second
-    wrap_angle = 70 # Degrees
-    c_distance = 5 # Inches
-    
-    ### Output Channels ###
-    m_step_channel = 12
-    c_step_channel = 16
-    c_dir_channel = 18
-    c_limit_switch = 22
-    
-    ### Physical System Constants ###
-    stepper_resolution = 200 # Steps per revolution
-    m_radius = 1.75 # Inches
-    c_pulley_teeth = 12
-    c_pulley_pitch = 0.2 # Inches
-    
-    ### Governing Equations ###
-    c_freq = c_velocity*stepper_resolution*c_pulley_pitch*c_pulley_teeth
-    print(c_freq)
-    m_freq = c_freq*tan(wrap_angle*3.14159/180)/(2*3.14159*c_pulley_pitch*c_pulley_teeth)
-    print(m_freq)
-    
+    c = Carriage()
+    m = Mandrel(c)
+        
     ### GPIO Setup ###
     GPIO.setwarnings(False)
     GPIO.setmode(GPIO.BOARD) # Use pin numbers for GPIO
-    GPIO.setup(m_step_channel, GPIO.OUT)
-    GPIO.setup(c_step_channel, GPIO.OUT)
-    GPIO.setup(c_dir_channel, GPIO.OUT)
-    GPIO.setup(c_limit_switch, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
+    GPIO.setup(m.step_channel, GPIO.OUT)
+    GPIO.setup(c.step_channel, GPIO.OUT)
+    GPIO.setup(c.dir_channel, GPIO.OUT)
+    GPIO.setup(c.limit_switch_channel, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
     
     ### Homing ###
-    home(c_step_channel, c_dir_channel, c_limit_switch)
+    c.home()
     
     ### Winding ###
-    t1 = Thread(target=mandrel, args=(m_step_channel, m_freq))
-    t2 = Thread(target=carriage, args=(c_step_channel, c_dir_channel, c_freq, c_distance))
+    t1 = Thread(target=m.start, args=())
+    t2 = Thread(target=c.start, args=())
     t2.start()
     t1.start()
-    t2.join()
+    t2.join() # Wait until t2 is done executing then kill both threads
 
     GPIO.cleanup()
 
