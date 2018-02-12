@@ -1,0 +1,3 @@
+This document describes the equations used in "test_jig.py". These equations are numbered in the code.
+
+Equation 1:
