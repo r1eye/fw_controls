@@ -7,17 +7,11 @@ import time
 stepper_resolution = 200 # Steps per revolution
 wrap_angle = 70 # Degrees
 
-class Pulse():
-    def __init__(self, pin_out, freq):
-        
-    def start():
-        
-
 
 class Mandrel():
     step_channel = 12
     radius = 1.75 # Inches
-    length = 8 # Inches
+    length = 7 # Inches
     
     def __init__(self, c):
         self.freq = c.freq*tan(wrap_angle*3.14159/180)\
@@ -38,7 +32,6 @@ class Mandrel():
 
 class Carriage():
     velocity = 1 # Inches per second
-    distance = 5 # Inches
     step_channel = 16
     dir_channel = 18
     limit_switch_channel = 22
@@ -52,11 +45,11 @@ class Carriage():
         while GPIO.input(self.limit_switch_channel) != 1:
             pass
         time.sleep(0.4) # debouncing button
-        GPIO.output(self.dir_channel, 1)
+        GPIO.output(self.dir_channel, 0)
         home_step.start(50)
         while GPIO.input(self.limit_switch_channel) != 1:
             pass
-        GPIO.output(self.dir_channel, 0)
+        GPIO.output(self.dir_channel, 1)
         time.sleep(0.1) # to move carriage away from limit switch
         home_step.stop()
         time.sleep (0.4) # debouncing button
@@ -73,20 +66,20 @@ class Carriage():
             after a certain amount of time, translate it in reverse.
         """
         step = GPIO.PWM(self.step_channel, self.freq)
-        passes = 0; # The number of passes the carriage does
+        passes = 1; # The number of passes the carriage does
         passes_total = 2*3.14159*cos(wrap_angle)/0.25 # Total passes needed to cover mandrel once
         latency = 0.2 # Delay of mandrel between passes on not motor end in inches
         offset_length = (2*m.length*tan(wrap_angle) + latency)%(2*3.14159*m.radius) # Inches
         offset_steps = stepper_resolution*offset_length/(2*3.14159*m.radius)
-        delay = 83.333*self.distance/self.freq # Time it takes to travel one pass
+        delay = 83.333*m.length/self.freq # Time it takes to travel one pass
         step.start(50)
-        while passes <= ceil(passes_total):
+        while passes <= ceil(passes_total)+4:
             GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
             time.sleep(delay)
-            if passes%2 != 0:
-                step.stop()
+            if passes%2 == 0:
+                step.ChangeDutyCycle(0)
                 time.sleep(2)
-                step.start(50) # BROKEN
+                step.ChangeDutyCycle(50) # BROKEN
                 # delay(time it takes for mandrel to rotate offset steps + filament toe offset step)
             passes = passes + 1
         step.stop()
@@ -98,7 +91,7 @@ def main():
 	Notes:
 	- Threading library: https://docs.python.org/2/library/threading.html
 	- With wiring of stepper as documented on drive, the carriage travels
-            toward the driving stepper when its pin is set to 1.
+            toward the driving stepper when its pin is set to 0.
         - Mandrel and carriage steppers are assumed to have the same steps per
             revolution
 		
