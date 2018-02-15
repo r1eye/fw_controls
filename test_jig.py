@@ -5,17 +5,17 @@ import time
 
 
 stepper_resolution = 200 # Steps per revolution
-wrap_angle = 70 # Degrees
+wrap_angle = 80 # Degrees
+tow_width = 0.25 # Inches
 
 
 class Mandrel():
     step_channel = 12
     radius = 1.75 # Inches
-    length = 7 # Inches
+    length = 7 # Inches, This is the length of the wrap
     
     def __init__(self, c):
-        self.freq = c.freq*tan(wrap_angle*3.14159/180)\
-                    /(2*3.14159*c.pulley_pitch*c.pulley_teeth) # Equation 2
+        self.freq = c.freq*c.pulley_teeth*c.pulley_pitch*tan(wrap_angle*3.14159/180)/(2*3.14159*self.radius)
     
     def start(self):
         """
@@ -30,14 +30,15 @@ class Mandrel():
         while True:
             pass
 
+
 class Carriage():
-    velocity = 1 # Inches per second
+    velocity = 0.5 # Inches per second
     step_channel = 16
     dir_channel = 18
     limit_switch_channel = 22
     pulley_teeth = 12
     pulley_pitch = 0.2 # Inches
-    freq = velocity*stepper_resolution*pulley_pitch*pulley_teeth # Equation 1
+    freq = velocity*stepper_resolution/(pulley_pitch*pulley_teeth)
     
     
     def home(self):
@@ -67,20 +68,25 @@ class Carriage():
         """
         step = GPIO.PWM(self.step_channel, self.freq)
         passes = 1; # The number of passes the carriage does
-        passes_total = 2*3.14159*cos(wrap_angle)/0.25 # Total passes needed to cover mandrel once
-        latency = 0.2 # Delay of mandrel between passes on not motor end in inches
-        offset_length = (2*m.length*tan(wrap_angle) + latency)%(2*3.14159*m.radius) # Inches
-        offset_steps = stepper_resolution*offset_length/(2*3.14159*m.radius)
-        delay = 83.333*m.length/self.freq # Time it takes to travel one pass
+        passes_total = 2*3.14159*m.radius*cos(wrap_angle*3.14159/180)/tow_width # Total passes needed to cover mandrel once
+        print("total passes")
+        print(passes_total)
+        latency = 0 # Delay of mandrel between passes on not motor end in inches
+        offset_length = 2*3.14159*m.radius-((2*m.length*tan(wrap_angle*3.14159/180) + latency)%(2*3.14159*m.radius)) # Inches
+        offset_time = offset_length*stepper_resolution/(2*3.14159*m.radius*m.freq) # does not account for extra time needed
+        print("offset time")
+        print(offset_time)
+        pass_time = m.length*stepper_resolution/(self.pulley_teeth*self.pulley_pitch*self.freq) # Time it takes to travel one pass
+        print("pass time")
+        print(pass_time)
         step.start(50)
-        while passes <= ceil(passes_total)+4:
+        while passes <= ceil(passes_total)+1: # + 1 because passes needs to start at 1 for dicerction
             GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
-            time.sleep(delay)
+            time.sleep(pass_time)
             if passes%2 == 0:
                 step.ChangeDutyCycle(0)
-                time.sleep(2)
-                step.ChangeDutyCycle(50) # BROKEN
-                # delay(time it takes for mandrel to rotate offset steps + filament toe offset step)
+                time.sleep(offset_time) # delay(time it takes for mandrel to rotate offset steps + filament toe offset step)
+                step.ChangeDutyCycle(50)
             passes = passes + 1
         step.stop()
         
@@ -109,6 +115,12 @@ def main():
     
     ### Homing ###
     c.home()
+    print("wrap angle")
+    print(wrap_angle)
+    print("mandrel freq")
+    print(m.freq)
+    print("carriage freq")
+    print(c.freq)
     
     ### Winding ###
     t1 = Thread(target=m.start, args=())
