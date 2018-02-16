@@ -1,3 +1,14 @@
-This document describes the equations used in "test_jig.py". These equations are numbered in the code.
+Notes Log:
 
-Equation 1:
+Monday February 19th 00:40
+
+- wrap angle problem somewhat fixed, wrap angles are accurate more or less to +- 2 degrees
+- current problem being addressed is inconsistant axial end position after each pass. At high
+	translational speeds this may be caused by slippage of timing belt pulley on
+	motor shaft, and at low speeds this may be from turnaround time (recognized by a rounded
+	path during direction shifts); however, both of these are yet to be validated or given
+	deep thought. These results are from test.py
+	- It seems that on test_jig.py the axial end positions move in and radial offset position
+	changes until a steady-state is reached this accounts for offset_time equation though which
+	may amplify the problem. 
+	- Problem is yet to be looked into on wrap angles > 30 degrees

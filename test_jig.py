@@ -1,3 +1,9 @@
+"""
+Version: R3
+
+"""
+
+
 from threading import Thread
 from math import tan, cos, ceil
 import RPi.GPIO as GPIO
@@ -5,13 +11,13 @@ import time
 
 
 stepper_resolution = 200 # Steps per revolution
-wrap_angle = 80 # Degrees
+wrap_angle = 20 # Degrees
 tow_width = 0.25 # Inches
 
 
 class Mandrel():
     step_channel = 12
-    radius = 1.75 # Inches
+    radius = 0.875 # Inches
     length = 7 # Inches, This is the length of the wrap
     
     def __init__(self, c):
@@ -32,7 +38,7 @@ class Mandrel():
 
 
 class Carriage():
-    velocity = 0.5 # Inches per second
+    velocity = 2 # Inches per second
     step_channel = 16
     dir_channel = 18
     limit_switch_channel = 22
@@ -51,7 +57,7 @@ class Carriage():
         while GPIO.input(self.limit_switch_channel) != 1:
             pass
         GPIO.output(self.dir_channel, 1)
-        time.sleep(0.1) # to move carriage away from limit switch
+        # time.sleep(0.1) # to move carriage away from limit switch
         home_step.stop()
         time.sleep (0.4) # debouncing button
         while GPIO.input(self.limit_switch_channel) != 1:
