@@ -11,12 +11,13 @@ import time
 
 
 stepper_resolution = 200 # Steps per revolution
-wrap_angle = 20 # Degrees
+wrap_angle = 10 # Degrees
 tow_width = 0.25 # Inches
 
 
 class Mandrel():
     step_channel = 12
+    encoder_switch_channel = 40
     radius = 0.875 # Inches
     length = 7 # Inches, This is the length of the wrap
     
@@ -38,10 +39,12 @@ class Mandrel():
 
 
 class Carriage():
-    velocity = 2 # Inches per second
+    velocity = 3 # Inches per second
     step_channel = 16
     dir_channel = 18
-    limit_switch_channel = 22
+    go_switch_channel = 36
+    motor_switch_channel = 22
+    far_end_switch_channel = 38
     pulley_teeth = 12
     pulley_pitch = 0.2 # Inches
     freq = velocity*stepper_resolution/(pulley_pitch*pulley_teeth)
@@ -49,18 +52,18 @@ class Carriage():
     
     def home(self):
         home_step = GPIO.PWM(self.step_channel, 100)
-        while GPIO.input(self.limit_switch_channel) != 1:
+        while GPIO.input(self.go_switch_channel) != 1:
             pass
         time.sleep(0.4) # debouncing button
-        GPIO.output(self.dir_channel, 0)
+        GPIO.output(self.dir_channel, 0) 
         home_step.start(50)
-        while GPIO.input(self.limit_switch_channel) != 1:
+        while GPIO.input(self.motor_switch_channel) != 1:
             pass
         GPIO.output(self.dir_channel, 1)
-        # time.sleep(0.1) # to move carriage away from limit switch
+        time.sleep(0.1) # to move carriage away from limit switch
         home_step.stop()
         time.sleep (0.4) # debouncing button
-        while GPIO.input(self.limit_switch_channel) != 1:
+        while GPIO.input(self.go_switch_channel) != 1:
             pass
 
 
@@ -77,23 +80,30 @@ class Carriage():
         passes_total = 2*3.14159*m.radius*cos(wrap_angle*3.14159/180)/tow_width # Total passes needed to cover mandrel once
         print("total passes")
         print(passes_total)
-        latency = 0 # Delay of mandrel between passes on not motor end in inches
-        offset_length = 2*3.14159*m.radius-((2*m.length*tan(wrap_angle*3.14159/180) + latency)%(2*3.14159*m.radius)) # Inches
-        offset_time = offset_length*stepper_resolution/(2*3.14159*m.radius*m.freq) # does not account for extra time needed
-        print("offset time")
-        print(offset_time)
-        pass_time = m.length*stepper_resolution/(self.pulley_teeth*self.pulley_pitch*self.freq) # Time it takes to travel one pass
-        print("pass time")
-        print(pass_time)
+        wait = stepper_resolution*tow_width/(2*3.14159*m.radius*m.freq)
+        count = 1
+        GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
+        while GPIO.input(m.encoder_switch_channel) != 1:
+            pass
         step.start(50)
-        while passes <= ceil(passes_total)+1: # + 1 because passes needs to start at 1 for dicerction
-            GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
-            time.sleep(pass_time)
-            if passes%2 == 0:
+        while passes < 30: # + 1 because passes needs to start at 1 for dicerction
+            if GPIO.input(self.motor_switch_channel) == 1:
+                passes = passes + 1
+                GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
+                #the equation in sleep below is a linearization of .75 -> 0.09 and 3 -> 0.01s
+                time.sleep(-velocity*0.03555555+0.1166666)
                 step.ChangeDutyCycle(0)
-                time.sleep(offset_time) # delay(time it takes for mandrel to rotate offset steps + filament toe offset step)
+                while GPIO.input(m.encoder_switch_channel) != 1:
+                    pass
+                time.sleep(wait*count)
+                print("wait")
+                count = count + 1
                 step.ChangeDutyCycle(50)
-            passes = passes + 1
+                
+            if GPIO.input(self.far_end_switch_channel) == 1:
+                passes = passes + 1
+                GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
+                time.sleep(0.4)
         step.stop()
         
 
@@ -117,7 +127,10 @@ def main():
     GPIO.setup(m.step_channel, GPIO.OUT)
     GPIO.setup(c.step_channel, GPIO.OUT)
     GPIO.setup(c.dir_channel, GPIO.OUT)
-    GPIO.setup(c.limit_switch_channel, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
+    GPIO.setup(c.motor_switch_channel, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
+    GPIO.setup(c.far_end_switch_channel, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
+    GPIO.setup(c.go_switch_channel, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
+    GPIO.setup(m.encoder_switch_channel, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
     
     ### Homing ###
     c.home()

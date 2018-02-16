@@ -8,12 +8,14 @@ if __name__ == "__main__":
     m_step_channel = 12
     c_step_channel = 16
     c_dir_channel = 18
+    close_switch_channel = 22
+    far_switch_channel = 32
     
     stepper_resolution = 200
-    wrap_angle = 10
+    wrap_angle = 80
     radius = 0.875
     length = 6
-    velocity = 5
+    velocity = 0.5
     pulley_teeth = 12
     pulley_pitch = 0.2
     
@@ -26,22 +28,27 @@ if __name__ == "__main__":
     GPIO.setup(m_step_channel, GPIO.OUT)
     GPIO.setup(c_step_channel, GPIO.OUT)
     GPIO.setup(c_dir_channel, GPIO.OUT)
+    GPIO.setup(close_switch_channel, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    GPIO.setup(far_switch_channel, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
     m_step = GPIO.PWM(m_step_channel, m_freq)
     c_step = GPIO.PWM(c_step_channel, c_freq)
     GPIO.output(c_dir_channel, 1)
     
+    while GPIO.input(close_switch_channel) != 1:
+        pass
+    time.sleep(0.4)
+    
     m_step.start(50)
-    time.sleep(2)
     c_step.start(50)
     
     dir = 1
     
-    while dir < 30:
-        GPIO.output(c_dir_channel, dir%2)
-        time.sleep(delay)
-        dir = dir +1
-        # time.sleep(0.1) # for turn around time
-        
+    while True:
+        if GPIO.input(close_switch_channel):
+            dir = dir + 1
+            GPIO.output(c_dir_channel, dir%2)
+            time.sleep(0.4)
+            
     
     m_step.stop()
     c_step.stop()
