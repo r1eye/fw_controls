@@ -1,2 +1,2 @@
-# FW_Controls
+# Filament Winding Machine Controls
 A collection of code used to control UVic Rocketry's Filament Winding Machine
