@@ -1,4 +1,5 @@
-Notes Log:
+
+tes Log:
 
 Monday February 19th 00:40
 
@@ -12,3 +13,12 @@ Monday February 19th 00:40
 	changes until a steady-state is reached this accounts for offset_time equation though which
 	may amplify the problem. 
 	- Problem is yet to be looked into on wrap angles > 30 degrees
+
+Sunday February 25th 12:00
+
+- wrap angle is pretty accurate. could use feedback to check speed of motors to make sure wrap angle 
+	is good. Not sure if this is necessary though, but would make system more robust.
+- total wrap equation has not been validated, not sure if it works. 
+- 3 limit switch design has been implemented.
+- homing limit switch is problematic as, the slower the translation of the carriage, the more time must
+	be allowed for the carriage to move away from the limit sitch and unpress it. 

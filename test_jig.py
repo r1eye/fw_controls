@@ -1,6 +1,7 @@
 """
-Version: R3
-
+	Release 1.0
+	Feb. 16, 2018
+	by Isaac Cormack
 """
 
 
