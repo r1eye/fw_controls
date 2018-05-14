@@ -1,6 +1,6 @@
 """
 	Release 1.0
-	Feb. 16, 2018
+	Feb. 25, 2018
 	by Isaac Cormack
 """
 
@@ -27,10 +27,10 @@ class Mandrel():
     
     def start(self):
         """
-            This function is ran on the t1 thread.
+            This method is ran on the t1 thread.
             Its purpose is to spin the mandrel at a calculated
             angular velocity according to the equation 2 while
-            the carriage function is executing. After which point
+            the carriage function is executing, after which point
             the both motors will stop.
         """
         step = GPIO.PWM(self.step_channel, self.freq)
@@ -55,55 +55,54 @@ class Carriage():
         home_step = GPIO.PWM(self.step_channel, 100)
         while GPIO.input(self.go_switch_channel) != 1:
             pass
-        time.sleep(0.4) # debouncing button
+        time.sleep(0.4) # Debouncing button
         GPIO.output(self.dir_channel, 0) 
         home_step.start(50)
         while GPIO.input(self.motor_switch_channel) != 1:
             pass
         GPIO.output(self.dir_channel, 1)
-        time.sleep(0.1) # to move carriage away from limit switch
+        time.sleep(0.1) # To move carriage away from limit switch
         home_step.stop()
-        time.sleep (0.4) # debouncing button
+        time.sleep (0.4) # Debouncing button
         while GPIO.input(self.go_switch_channel) != 1:
             pass
 
 
     def start(self, m):
         """
-            This function is ran on the t2 thread.
+            This method is ran on the t2 thread.
             Its purpose is to give pulses to the carriages motor
             driver at a constant frequency as to translate the
             the mandrel horizontally at a constant velocity, then,
-            after a certain amount of time, translate it in reverse.
+            when a limit switch at the end of the travel length is 
+            hit, translate it in reverse.
         """
         step = GPIO.PWM(self.step_channel, self.freq)
-        passes = 1; # The number of passes the carriage does
+        passes = 1; # The pass which the carriage is on,
+		    # passes must be initialized as 1 for carriage to travel in correct direction on first pass
         passes_total = 2*3.14159*m.radius*cos(wrap_angle*3.14159/180)/tow_width # Total passes needed to cover mandrel once
-        print("total passes")
-        print(passes_total)
         wait = stepper_resolution*tow_width/(2*3.14159*m.radius*m.freq)
         count = 1
-        GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
+        GPIO.output(self.dir_channel, passes%2) # passes%2 sets the direction of the carriage
         while GPIO.input(m.encoder_switch_channel) != 1:
             pass
         step.start(50)
-        while passes < 30: # + 1 because passes needs to start at 1 for dicerction
+        while passes < 30:
             if GPIO.input(self.motor_switch_channel) == 1:
                 passes = passes + 1
-                GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
+                GPIO.output(self.dir_channel, passes%2)
                 #the equation in sleep below is a linearization of .75 -> 0.09 and 3 -> 0.01s
                 time.sleep(-velocity*0.03555555+0.1166666)
                 step.ChangeDutyCycle(0)
                 while GPIO.input(m.encoder_switch_channel) != 1:
                     pass
                 time.sleep(wait*count)
-                print("wait")
                 count = count + 1
                 step.ChangeDutyCycle(50)
                 
             if GPIO.input(self.far_end_switch_channel) == 1:
                 passes = passes + 1
-                GPIO.output(self.dir_channel, passes%2) # c_pass%2 to change direction
+                GPIO.output(self.dir_channel, passes%2)
                 time.sleep(0.4)
         step.stop()
         
@@ -111,10 +110,9 @@ class Carriage():
 def main():
 
     """
-	Notes:
 	- Threading library: https://docs.python.org/2/library/threading.html
 	- With wiring of stepper as documented on drive, the carriage travels
-            toward the driving stepper when its pin is set to 0.
+            toward its driving stepper when direction pin is set to 0.
         - Mandrel and carriage steppers are assumed to have the same steps per
             revolution
 		
@@ -135,12 +133,6 @@ def main():
     
     ### Homing ###
     c.home()
-    print("wrap angle")
-    print(wrap_angle)
-    print("mandrel freq")
-    print(m.freq)
-    print("carriage freq")
-    print(c.freq)
     
     ### Winding ###
     t1 = Thread(target=m.start, args=())
