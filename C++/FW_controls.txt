@@ -1,0 +1,233 @@
+
+
+int loopcount = 0;
+void setup() {
+  pinMode(12,INPUT);
+  pinMode(11,INPUT);
+  pinMode(5,INPUT);
+  Serial.begin(9600);//used to do serial.monitor shit
+ 
+}
+
+
+class Carriage//could reduce memory by making this static/only one instance
+{
+  public:
+  int _Cstep_pin,_Cdir_pin,_wrap_angle;//can make carriage spped user inputable pretty easily, teeth and pitch will be constants 
+  int _C_pulley_teeth = 12;
+  float _C_pulley_pitch = 0.2;//inches
+  float _Cfreq,_Ccycle;
+  int _stepper_resolution=200;//steps per revolution
+  float _velocity = 1;//inch per second////////////////////////////////////////////VELOCITY
+ 
+  Carriage( int wrap_angle);//constructor
+  void freq();//calculate carriage frequency based on desired velocity
+  float cycle();//calculate carriage step period based on calculated frequency
+private:
+
+};
+
+Carriage::Carriage( int wrap_angle)
+{
+_Cstep_pin = 7;
+_Cdir_pin = 8;
+_wrap_angle=wrap_angle;
+pinMode(_Cstep_pin,OUTPUT);
+pinMode(_Cdir_pin,OUTPUT);
+}
+
+void Carriage::freq()
+{
+ _Cfreq= _velocity*_stepper_resolution/(_C_pulley_pitch*_C_pulley_teeth);//can probably refrence this in _Ccycle
+}
+float Carriage::cycle()
+{
+  
+ return _Ccycle= 1000/(_velocity*_stepper_resolution/(_C_pulley_pitch*_C_pulley_teeth));//1000 so that it ends up in ms
+}
+
+
+
+
+
+class Mandrel // dependent of class carriage
+{
+  public:
+  int _Mstep_pin,_Mdir_pin, _C_pulley_teeth, _wrap_angle;
+  float _Mlength,_Mradius, _C_pulley_pitch,_Cfreq,_Mcycle;
+  Mandrel( float radius, float Mlength, int wrap_angle, float Cfreq, int C_pulley_teeth, float C_pulley_pitch);
+  float cycle();//called to determine the duty cycle/frequency mandrel spins at with relation to the carriage (and more when 4axis)
+  private://maybe some variable should be private but i like my variables open until I know for sure
+};
+
+Mandrel::Mandrel( float radius, float Mlength, int wrap_angle, float Cfreq, int C_pulley_teeth, float C_pulley_pitch)//constructor 
+{
+  _Mstep_pin=9;//connected to the step pin for the associated madnrel stepper
+  _Mdir_pin=10;//stepper direction pin
+  _Mradius=radius;//radius of the mandrel used to calculated frequency of steps to achieve certian velocities
+  _Mlength=Mlength;// will be needed for 4 axis
+  _wrap_angle=wrap_angle;
+  _Cfreq=Cfreq;
+  _C_pulley_teeth = C_pulley_teeth;
+  _C_pulley_pitch = C_pulley_pitch;
+  pinMode(_Mstep_pin,OUTPUT);
+  pinMode(_Mdir_pin,OUTPUT);
+}
+
+float Mandrel::cycle()
+{
+return _Mcycle=1000/(_Cfreq*_C_pulley_teeth*_C_pulley_pitch*tan(_wrap_angle*3.14159/180)/(2*3.14159*_Mradius));//the formula given in your PI code for mandrel frequency
+}
+
+
+
+
+
+void loop() {
+  
+float M_radius = 0.875;//inches
+float M_length = 0.25;//inches
+int wrap_angle = 70;//degrees
+int stepcount[]={0,0,0,0};//used to store the amount of steps completed by a specific stepper
+
+
+Carriage C(wrap_angle);
+C.freq();//calculate carriage frequency 
+C.cycle();//so first thing first we need to turn all the requirements (wrap angle and shit) into parameters we can give the motors(velocity/frequency)
+
+Mandrel M(M_radius,M_length,wrap_angle,C._Cfreq, C._C_pulley_teeth, C._C_pulley_pitch); 
+M.cycle();//determines the speed the mandrel should spin at based on the desired wrap angle and the given carriage attributes
+
+Serial.print("C step cycle =");//just good to varify that we are getting expected frequencies
+  Serial.print(C._Ccycle,4);
+  Serial.print("\n");
+  Serial.print("M step cycle =");
+  Serial.print(M._Mcycle,4);
+  Serial.print("\n");
+  Serial.print("C._velocity begin =");//usefull to varify that the correct amout if steps are undertaken
+  Serial.print(C._velocity);
+  Serial.print("\n");
+digitalWrite(M._Mstep_pin,HIGH);
+digitalWrite(M._Mdir_pin,HIGH);
+
+unsigned long step_startC = millis();//used to keep track of status of step cycle
+unsigned long step_startM = step_startC;
+unsigned long step_start3 = step_startC;
+unsigned long step_start4 = step_startC;
+unsigned long acc_pstartC = 0;
+float Velocity_initial = C._velocity;//needs to remain as orgiinal velocity so calculation can be done//
+float new_vel = C._velocity;//at start basicly just a place holder for what we want velocity to stay at for initail conditions
+int start_time = millis();
+int x =0;
+int y =0;
+int acc_finish = 0;
+int acc_start =0;
+
+while(millis()<=1000)//this loop will cause the motors to do the appropriate amount of steps and speed to achieve a wrap angle(continues infinitly as of now)
+{
+
+//decelerate at 0.3cm^2    
+step_startC=step_motor(C._Cstep_pin, step_startC,C.cycle(), &stepcount[1]); //checks and adjustes the carriages step options
+
+step_startM=step_motor(M._Mstep_pin, step_startM,M.cycle(), &stepcount[2]); //checks and adjusts the mandrel step options
+//step_start3=step_motor(11, step_start3,1000, &stepcount[3]);
+//step_start4=step_motor(12, step_start4,500, &stepcount[4]);
+
+
+acc_pstartC = Velocity_adjust(acc_pstartC,&C._velocity,Velocity_initial, new_vel,5000); //(update timer place holder, updates class velocity variable, holds the starting velocity, desired new velocity, time it takes to update.
+
+
+if(digitalRead(5) == HIGH&&y==0)
+{
+acc_start=millis();
+acc_pstartC = millis();
+ new_vel = 1.00; //is the number we want to accelerate to(can be pretty easily when mapping the way we want the (cus should always return to constant in middle
+ y=1;
+}
+
+if(C._velocity >=0.999 &&C._velocity<=1.001&&x ==0)//mostly used to validate that acceleration takes the correct amount of time
+{
+acc_finish=millis();
+x=1;
+}
+
+if(digitalRead(12) ==HIGH)//pretty self explanitory    just to get jig bouncing between limits
+{
+digitalWrite(C._Cdir_pin,LOW);//low
+}
+if(digitalRead(11) ==HIGH)
+{
+digitalWrite(C._Cdir_pin,HIGH);
+}
+
+}
+
+
+
+
+int end_time = millis();
+  Serial.print("Cstepcount =");//usefull to varify that the correct amout if steps are undertaken
+  Serial.print(stepcount[1]);
+  Serial.print("\n");
+  Serial.print("Mstepcount =");//used to verify that we get the appropriate amount of steps for a given run time
+  Serial.print(stepcount[2]);
+  Serial.print("\n");
+  Serial.print("Be warned that if code ends withing second half of period for a step that step may no be counted.");
+  Serial.print("\n");
+   Serial.print("C._velocity end =");//usefull to varify that the correct amout if steps are undertaken
+  Serial.print(C._velocity);
+  Serial.print("\n");
+    Serial.print("acc_start  =");//usefull to varify that the correct amout if steps are undertaken
+  Serial.print(acc_start);
+  Serial.print("\n");
+    Serial.print("acc_finish =");//usefull to varify that the correct amout if steps are undertaken
+  Serial.print(acc_finish);
+  Serial.print("\n");
+      Serial.print("miilis at end =");//usefull to varify that the correct amout if steps are undertaken
+  Serial.print(end_time);
+  Serial.print("\n");
+
+
+while(true){};//traps code in nothingness loop once completed
+}
+
+
+unsigned long step_motor(int step_pin, unsigned long step_start, float cycle, int *stepcount) //the step function
+{ 
+  if(millis()-step_start>=cycle*0.5)//check to see if we are in second half of cycle or not
+{
+ digitalWrite(step_pin, HIGH);
+}
+else
+{
+  digitalWrite(step_pin, LOW);
+}
+
+if(millis()-step_start>=cycle)//whatch for the > than
+{
+  step_start =step_start+cycle;//itterate the period place holder by 1 period to start new period
+  *stepcount= *stepcount+1;//increase step counter so that we can track steps
+} 
+return step_start;
+}
+
+
+
+unsigned long Velocity_adjust(unsigned long acc_pstart,float *V_class,float V_init,  float V_new, int acc_length) //the step function
+{ 
+  
+  float period = 1;
+  if(!(abs(*V_class-V_new)<0.001))//this guy because != 0 doesnt trigger accurace may be an issue refer to book for this shit
+{
+if(millis()-acc_pstart>=period)//check if we need to update speed yet (is a hardset value of how often we update this guy
+{
+*V_class = *V_class + ((V_new-V_init)/acc_length)*period;//this last equation could be done outside this function and remove some variabes needed a input
+  acc_pstart =acc_pstart + period;
+} 
+}
+return acc_pstart;
+}
+
+
+
+
