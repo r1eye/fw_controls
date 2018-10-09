@@ -1,0 +1,609 @@
+#include "mbed.h"
+#include "math.h"
+Serial pc(SERIAL_TX, SERIAL_RX);//setup serial com
+
+volatile int timekeep;//after doing a good amount of reaserch it seems that because of the scoping issue of isr to main, a global tick counter is a reasonable use of a global variable.
+
+void time_itterate()
+{
+    timekeep++;
+    }
+
+
+
+////////////////////////carriage class///////////////////////////////
+ class Carriage//could reduce memory by making this singleton?
+{
+  public:
+ int _wrap_angle,_stepper_resolution;//can make carriage spped user inputable pretty easily, teeth and pitch will be constants 
+ float _Ccycle,_Velocity,_Csteps_per_cm;
+ 
+  Carriage( int wrap_angle,int stepper_resolutionC,float Csteps_per_cm);//constructor
+  float cycle();//calculate carriage step period based on calculated frequency
+private:
+};
+
+Carriage::Carriage( int wrap_angle,int stepper_resolutionC,float Csteps_per_cm)
+{
+
+_stepper_resolution=stepper_resolutionC;//steps per revolution//////////////////////////////////////////////////////////should implement this into the 33.3333 cus it affects is
+_Velocity = 3;//cm per second    gets set in code anyway
+_wrap_angle=wrap_angle;
+_Csteps_per_cm = Csteps_per_cm;
+
+}
+
+float Carriage::cycle()
+{
+ return _Ccycle= 10000/(_Velocity*_Csteps_per_cm);//10000 so that it ends up in ms*10^-1    10000/(distance/second)*(steps/distance) 33.3333= steps per cm with current gear ratios
+}
+
+ 
+
+
+
+//////////////////////////////mandrel class///////////////////////
+class Mandrel // dependent of class carriage     could make into a singleton
+{
+  public:
+  int   _wrap_angle,_C_end_step_total;
+  float _Mlength,_Mradius,_Mcycle,_Velocity,steps_per_cm,end_step_count,_end_rotation_percentage,_Mstepper_resolution,_Mchange_Threshhold,_Mchange_Duration;
+  Mandrel( float radius, float Mlength, int wrap_angle, int Mstepper_resolution,int end_rotation_percentage,float Mchange_Duration,int C_end_step_total); 
+  float middle_cycle(float *_CVelocity);//called to determine the duty cycle/frequency mandrel spins at with relation to the carriage (and more when 4axis)
+  float linear_end_cycle1(float Ccycle_end, float *end_Cdistance);
+  float linear_end_cycle2(int Cstepcount, float Ccycle);
+  private://maybe some variable should be private but i like my variables open until I know for sure
+};
+
+Mandrel::Mandrel( float radius, float Mlength, int wrap_angle, int Mstepper_resolution,int end_rotation_percentage,float Mchange_Duration,int C_end_step_total)//constructor 
+{
+  _Mradius=radius;//radius of the mandrel used to calculated frequency of steps to achieve certian velocities
+  _Mlength=Mlength;// will be needed for 4 axis
+  _wrap_angle=wrap_angle;
+  _end_rotation_percentage = end_rotation_percentage;
+  _Mstepper_resolution = Mstepper_resolution;
+  end_step_count = (_end_rotation_percentage/100)*_Mstepper_resolution;
+  _Mchange_Threshhold=(1-Mchange_Duration)*C_end_step_total;//for a change duration of the last 25% of the end region gives value of 0.75*total steps in end region
+_Mchange_Duration=C_end_step_total*Mchange_Duration;//how many steps carraige the feeder has to do its motion
+_C_end_step_total = C_end_step_total;
+steps_per_cm= 1/(20*3.14159*_Mradius/_Mstepper_resolution);//  1/(cm/step)
+ }
+
+float Mandrel::middle_cycle(float *_CVelocity)
+{
+    _Velocity = *_CVelocity/tan(_wrap_angle*3.14159/180);
+//return _Mcycle=1000/(_Cfreq*_C_pulley_teeth*_C_pulley_pitch*tan(_wrap_angle*3.14159/180)/(2*3.14159*_Mradius));//see paperwork to work out
+return _Mcycle = 10000/(_Velocity*steps_per_cm);
+}
+
+float Mandrel::linear_end_cycle1(float Ccycle_end, float *end_Cdistance)
+{ 
+//return _Mcycle=1000/(_Cfreq*_C_pulley_teeth*_C_pulley_pitch*tan(_wrap_angle*3.14159/180)/(2*3.14159*_Mradius));//see paperwork to work out
+ _Velocity = 10000/(((Ccycle_end)*(*end_Cdistance*3333.33f)/(end_step_count))*33.333f);//see feeder for easier to understand relation like this
+return _Mcycle = 10000/(33.33f*_Velocity);//whole velocity transformation is unnecisary but may prove to be usefull
+}
+
+float Mandrel::linear_end_cycle2(int Cstepcount, float Ccycle)//roatates the feeder head 180 degrees during last bit of end region. can specify length of "last bit" as %of end region left (change duration)
+{
+    if(Cstepcount >= _Mchange_Threshhold)
+    {
+    _Mcycle =  Ccycle*((0.5f)*_Mchange_Duration)/(end_step_count);//(time/stepC)/(stepsy/stepsx)   *2 becasue of gear ratio           
+// pc.printf("_Mcycle = %f \n",_Mcycle);//just good to varify that we are getting expected frequencies
+
+    }
+    else
+    {
+        _Mcycle = 400;//used to help avois slippage     will base on carraige speed eventually
+        }
+    return _Mcycle;
+    }
+
+
+
+
+
+
+/////////////////////////////////////////Radial///////////////////////////////////////////////////////////////
+ class Radial//could reduce memory by making this singleton?
+{
+  public: 
+
+ float _Rcycle,_Follow_Radius,_steps_per_rotation,_distance_per_rotation,_Velocity;
+  Radial(float *radius, float distanceR, float distanceC);//constructor
+  float sphere_end_cycle(int stepcount);//calculate carriage step period based on calculated frequency
+  float linear_end_cycle(float Ccycle);
+  float steps_per_cm;
+  float _distanceR,_distanceC;
+private:
+};
+
+Radial::Radial(float *Mradius, float distanceR, float distanceC)
+{
+//_Follow_Radius = *Mradius*(3333.33f)+(Follow_distance)*(3333.33f);//(radius of end in m)(steps/m) + (follow distance)(steps/m) = follow radius in steps
+steps_per_cm =33.333;
+_distanceR = distanceR;// 0.06;//used to calculat ration of carriage to radial movement # is cm moved by radial in cm during end region
+_distanceC=distanceC;//0.075;//.069 for end region + a bit for carraige lead used to calculat ration of carriage to carraige movement # is cm moved by carriage in cm during end region
+//length of end region (can possible get better values through better home
+}
+
+float Radial::sphere_end_cycle(int stepcount)//work in progress
+{
+//_Rcycle=10000*sqrt(2*(_Follow_Radius)*(stepcount)-(stepcount)*(stepcount))/((_Follow_Radius-stepcount)*steps_per_cm);  //1000 so that it ends up in ms
+//_Velocity = steps_per_cm/(_Rcycle);
+ //arm_sqrt_f32(((_Follow_Radius)*(_Follow_Radius)+(stepcount)*(stepcount)),&_Rcycle);       
+ // pc.printf("R int da shit =");//just good to varify that we are getting expected frequencies
+ // pc.printf("%f",_Rcycle);
+ // pc.printf("\n");
+
+ return _Rcycle=1;
+ }
+float Radial::linear_end_cycle(float Ccycle)
+{
+ return _Rcycle= _distanceC/_distanceR*(Ccycle);//for R to move a fraction of the distance c than it moves at that same fraction of the speed.
+ }
+
+
+
+
+
+/////////////////////////////////////////Feeder///////////////////////////////////////////////////////////////
+ class Feeder//could reduce memory by making this singleton?
+{
+  public: 
+  float _Fcycle, degrees_per_step,_stepper_resolution,_distance_per_rotation,_Velocity,_Fchange_Duration,_Fchange_Threshhold;
+  int _C_end_step_total;
+  Feeder(int stepper_resolution,float Fchange_Duration,int C_end_step_total);//constructor
+  float linear_end_cycle(float Cstepcount,float Ccyle);
+private:
+};
+
+Feeder::Feeder(int stepper_resolution,float Fchange_Duration,int C_end_step_total)
+{
+_stepper_resolution=stepper_resolution;
+_Fchange_Threshhold=(1-Fchange_Duration)*C_end_step_total;//for a change duration of the last 25% of the end region gives value of 0.75*total steps in end region
+_Fchange_Duration=Fchange_Duration*C_end_step_total;//how many steps carraige the feeder has to do its motion
+_C_end_step_total = C_end_step_total;
+degrees_per_step = 360/_stepper_resolution;//1.8;
+}
+
+float Feeder::linear_end_cycle(float Cstepcount, float Ccycle)//roatates the feeder head 180 degrees during last bit of end region. can specify length of "last bit" as %of end region left (change duration)
+{
+    if(Cstepcount >= _Fchange_Threshhold)
+    {
+    _Fcycle =  Ccycle*(_Fchange_Duration)/(2*180/degrees_per_step);//(time/stepC)/(stepsy/stepsx)   *2 becasue of gear ratio           
+    }
+    else
+    {
+        _Fcycle = -1;//could run into issues here but probs not used as sub for inf
+        }
+    return _Fcycle;
+    }
+
+
+
+
+
+//////////////////////////////////step function/////////////////////////////
+
+unsigned long step_motor(DigitalOut &step_pin, unsigned long step_start, float cycle, int *stepcount) //the step function
+{ 
+
+  if(timekeep-step_start>=cycle*0.5f)//check to see if we are in second half of cycle or not
+{
+step_pin = 1;
+}
+else
+{
+step_pin = 0;
+}
+
+if(timekeep-step_start>=cycle)//whatch for the > than
+{
+  step_start =timekeep;//itterate the period place holder by 1 period to start new period
+  *stepcount= *stepcount+1;//increase step counter so that we can track steps
+} 
+
+
+return step_start;
+}
+
+
+
+
+////////////////////////////////////////velocity adjuct/acceleration function//////////////
+unsigned long Change_Velocity(unsigned long acc_pstart,float *V_current,float *V_init,  float *V_new, int *Acc_length, int *mode, DigitalOut *Dir_Pin) //the step function
+{ 
+ 
+  if(*mode==1)
+  {
+     if(*V_current<= 0.001f && *V_new<=0.0001f)
+     {
+      *Dir_Pin= !*Dir_Pin;
+      *V_new = *V_init;
+      *V_init = *V_current;
+      *mode = 0;
+      }
+      
+    }
+  
+  float period =1.00;
+  if(!(abs(*V_current-*V_new)<0.001f))//this guy because != 0 doesnt trigger accurace may be an issue refer to book for this shit
+{
+if(timekeep-acc_pstart>=period)//check if we need to update speed yet (is a hardset value of how often we update this guy
+{
+*V_current = *V_current + ((*V_new-*V_init)/(*Acc_length*10))*period;//this last equation could be done outside this function and remove some variabes needed a input
+  acc_pstart =acc_pstart + period;
+ /* if(*V_current>=3.999f && *V_current<=4.0001f)
+  {
+  *acccount=timekeep;
+  }
+*/
+} 
+}
+
+return acc_pstart;
+}
+
+
+
+
+/////////////////////////////////Velocity_Set///////////////////
+//acc_pstartC = Velocity_adjust(acc_pstartC,&C._velocity,Velocity_initial, new_vel,50000,&acccount); //(update timer place holder, updates class velocity variable, holds the starting velocity, desired new velocity, time it takes to update.
+void Velocity_Set(float New_New_Vel, float *New_Vel,float *Init_Vel,float *Current_Vel,int New_Speed, int *Change_Speed, int *mode, int New_mode)//kinda silly the way i set this up but fuck it
+{
+    *Init_Vel = *Current_Vel;
+    *New_Vel=New_New_Vel;
+     *Change_Speed = New_Speed;
+    *mode = New_mode;
+    }
+
+
+
+
+
+
+
+/*////////////////////////////////////homing function (in main rn)//////////////
+void home(&carriage_dir)
+{
+  carriage_dir = 1;
+    
+    }
+
+*/
+
+
+
+
+
+
+
+
+
+///////////////////////////////////////////////////////main//////////////////////////////////
+
+int main() {
+float M_radius = 0.055;//m
+//float R_follow = M_radius + 0.01f;
+float M_length = 0.913;//meters
+int wrap_angle = 70;//degrees
+int stepper_resolution=200;
+int end_rotation_percentage = 80;//the amount of a 180 degree turn we perform at the end 
+int feeder_angle = 260;
+float end_distanceR =0.08;//m that we travel during linear end region with Radial remember to add in acc distance
+float end_distanceC = 0.1;//m that we travel during linear end region with Carriage remeber to add in acc distance
+/////////////////////^is related to mandrel radius
+float C_steps_per_cm = 33.333;
+float C_end_region_vel=1.5;
+float C_middle_region_vel=4;
+int acc_comp[]={93,93,0,0};//steps to take away from M_length cus of acc region
+int carraige_calibrate = -18*3.33;//(mm)(3.33=1mm)added to carraige middle length to compensate for incorrect carragie distance measurements when i cant find the error
+//some errors may be from the prints
+float F_end_rotation_duration = 0.05;//the amount of the end region the feeder rotates for
+float M_end_rotation_duration = 0.1; //^
+int stepcount[]={0,0,0,0,0};
+                            // 5th step count is for oscillation
+
+DigitalOut Mstep_pin(D11);
+DigitalOut Mdir_pin(D10);
+
+DigitalOut Cstep_pin(D9);
+DigitalOut Cdir_pin(D8);
+
+DigitalOut Rstep_pin(D13);
+DigitalOut Rdir_pin(D12);
+
+DigitalOut Fstep_pin(D7);
+DigitalOut Fdir_pin(D6);
+
+
+DigitalIn limit_carraige(D5);
+DigitalIn limit_radial(D2);
+DigitalIn button(D3);
+
+ Carriage C(wrap_angle,stepper_resolution,C_steps_per_cm);
+
+C.cycle();//so first thing first we need to turn all the requirements (wrap angle and shit) into parameters we can give the motors(velocity/frequency)
+
+Mandrel M(M_radius,M_length,wrap_angle,stepper_resolution,end_rotation_percentage,M_end_rotation_duration,end_distanceC*3333.33f); 
+
+Radial R(&M_radius,end_distanceR,end_distanceC);
+
+Feeder F(stepper_resolution,F_end_rotation_duration,end_distanceC*3333.333f);
+
+
+int Acc_length[] = {0,0,0,0};//speed of acceleration (array for all)([0]->[3] is carraige mandrel radial and feeder respectively)
+unsigned long acc_pstart[]={0,0,0,0};
+float Velocity_initial[] = {C._Velocity,M._Velocity,R._Velocity,F._Velocity};//needs to remain as orgiinal velocity so calculation can be done//
+float new_vel[] = {C._Velocity,M._Velocity,R._Velocity,F._Velocity};//at start basicly just a place holder for what we want velocity to stay at for initail conditions
+
+
+/*
+unsigned long acc_pstartF = 0;
+float FVelocity_initial = F._velocity;//needs to remain as orgiinal velocity so calculation can be done//
+float Fnew_vel = F._velocity;//at start basicly just a place holder for what we want velocity to stay at for initail conditions
+*/
+int passes = 0;//number of passes 
+int mode[] = {0,0,0,0};//0 = straight 1 = corner      might not be using anymore
+//end_region_length =  
+Cdir_pin = 0;
+Rdir_pin = 0;
+Fdir_pin = 1;//important so feeder starts at 1 after first !dir
+
+  pc.printf("starting C step cycle =");//just good to varify that we are getting expected frequencies
+  pc.printf("%f",C._Ccycle);
+  pc.printf("\n");
+ // pc.printf("M step cycle =");
+ // pc.printf("%f",M._Mcycle);
+//  pc.printf("\n");
+    pc.printf("starting R step cycle =");//just good to varify that we are getting expected frequencies
+  pc.printf("%f",R.sphere_end_cycle(stepcount[0]));
+  pc.printf("\n");
+  pc.printf("C._velocity begin =");//usefull to varify that the correct amout if steps are undertaken
+  pc.printf("%f",C._Velocity);
+  pc.printf("\n");
+  
+  
+  
+///////////////////////timer setup//////////////////////////////////////////
+Ticker time_tick;
+time_tick.attach(&time_itterate,0.0001);
+timekeep = 0;
+unsigned long step_startC = timekeep;//used to keep track of status of step cycle
+unsigned long step_startR = timekeep;
+unsigned long step_startM = timekeep;
+unsigned long step_startF =timekeep;
+  pc.printf("\n stepstart at start = %d \n",step_startC);
+   pc.printf("\n timekeep at start = %d \n",timekeep);
+   
+   
+   
+
+////////////////////////////////home in main///////////////////////////////////////////////////////////////////////////////////////
+////////could maybe do a function///////////
+
+///////////////////////////carraige home/////////////////////////////////////
+while(limit_carraige == 1)//a position of 6.9 cm from start of center region
+{
+   // acc_pstartC = Change_Velocity(acc_pstartC,&C._Velocity,&CVelocity_initial, &Cnew_vel,&Acc_length[0],&acccount, &mode, &Cdir_pin); //(update timer place holder, updates class velocity variable, holds the starting velocity, desired new velocity, time it takes to update.
+    step_startC=step_motor(Cstep_pin, step_startC,C.cycle(), &stepcount[0]);
+    }
+//Velocity_Set(0, &Cnew_vel,&CVelocity_initial,&C._Velocity,200, &Acc_length[0], &mode, 1);//set parameters for change_velocity to do a direction change
+stepcount[0] =0;
+
+while(stepcount[0]<=23*3.333f)
+{
+   step_startC=step_motor(Cstep_pin, step_startC,C.cycle(), &stepcount[0]);
+    }
+stepcount[0]=0;
+//wait(4); 
+
+
+
+////////////////////////////////Radial Home///////////////////////////////////////////////////////////////////////
+while(limit_radial == 1)//this is a position of 4.3 cm from mandrel axis
+{
+  //  acc_pstartR = Change_Velocity(acc_pstartR,&R._Velocity,&RVelocity_initial, &Rnew_vel,&Acc_length[2],&acccount, &mode, &Rdir_pin); //(update timer place holder, updates class velocity variable, holds the starting velocity, desired new velocity, time it takes to update.
+    step_startR=step_motor(Rstep_pin, step_startR,100, &stepcount[2]);
+    }
+//Velocity_Set(0, &Rnew_vel,&RVelocity_initial,&R._Velocity,200, &Acc_length[2], &mode, 1);//set parameters for change_velocity to do a direction change
+stepcount[2] =0;
+pc.printf("radial home \n",C._Ccycle);
+
+
+step_startR = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+Rdir_pin =1;//= 0 above
+while(stepcount[2]<=2*3.33)//for linear start postion of 4cm
+{
+   step_startR=step_motor(Rstep_pin, step_startR,100, &stepcount[2]);
+   }
+ 
+stepcount[2]=0;
+Rdir_pin =0;//this is important so that radial start in the go "out" position when it hits the first !dir
+
+
+
+///////////////////////////////////////////////feeder home///////////////////////////////////////////////////////////////////////////
+step_startF = timekeep;
+while(stepcount[3]<= (feeder_angle)*2/(F.degrees_per_step))//degrees*(step/degrees) = steps    steps/2 because 1 step = 2* the distance from gear ratio
+{
+step_startF=step_motor(Fstep_pin, step_startF,100, &stepcount[3]);
+}
+
+
+//Fdir_pin=!Fdir_pin;
+  pc.printf("C cycle begining of loop = %f \n",C._Ccycle);
+  pc.printf("R cycle begining of loop = %f \n",R.sphere_end_cycle(stepcount[0]));
+wait(5);
+
+
+
+pc.printf("R.linearcycle begining of loop = %f \n",R.linear_end_cycle(C.cycle()));
+pc.printf("mandrel middle cycle beging of loop = %f \n",M.middle_cycle(&C._Velocity));
+
+
+
+
+
+
+
+
+
+
+
+////////////////////////////////////////////////////////////////////////////linear end region motion/////////////////////////////////
+while(passes<=5)
+{
+/////////////////////////////////////////////////////////first end region/////////////////////////////////
+
+
+//////////////////////////////////////////radial and carraige end region move///////////////
+stepcount[0]=0;
+stepcount[2]=0;
+stepcount[1]=0;
+stepcount[3]=0;
+Rdir_pin = !Rdir_pin;
+Cdir_pin = !Cdir_pin;
+Fdir_pin = !Fdir_pin;
+C._Velocity=C_end_region_vel;//used to set initial speed at start of pass
+/*
+pc.printf("stepcount[0] before end2=%d \n",stepcount[0]);
+pc.printf("C.velocity before end2=%f \n",C._Velocity);
+pc.printf("time before end2 = %d \n",timekeep);
+*/
+step_startM = timekeep;
+step_startR = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+step_startC = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+while(stepcount[0]<=R._distanceC*3333.33f)//3333.33 for steps per meter
+{
+step_startC=step_motor(Cstep_pin, step_startC,C.cycle(), &stepcount[0]);
+step_startM=step_motor(Mstep_pin, step_startM,500, &stepcount[1]); //checks and adjusts the mandrel step options
+step_startR=step_motor(Rstep_pin, step_startR,R.linear_end_cycle(C.cycle()), &stepcount[2]);
+}
+
+////////////////////////////////////carriage acc1 change////////////////////////
+//all will need something in here once vcarraige is set though we can just use middle cycle functions to get velocity
+/*
+pc.printf("stepcount[0] after end2=%d \n",stepcount[0]);
+pc.printf("C.velocity after end2=%f \n",C._Velocity);
+pc.printf("time after end2 = %d \n",timekeep);
+*/
+stepcount[0]=0;
+stepcount[2]=0;
+stepcount[1]=0;
+
+Velocity_Set(C_middle_region_vel, &new_vel[0],&Velocity_initial[0],&C._Velocity,1000, &Acc_length[0], &mode[0], 0);
+/*
+pc.printf("stepcount[0] before acc1=%d \n",stepcount[0]);
+pc.printf("C.velocity before acc1=%f \n",C._Velocity);
+pc.printf("time before acc1 = %d \n",timekeep);
+*/
+step_startM = timekeep;
+step_startR = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+step_startC = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+acc_pstart[0]=timekeep;
+while(C._Velocity <=C_middle_region_vel-0.001f)//is about (91) steps carriage and not 1 second idk why
+{
+   // pc.printf("C.velocity in loop=%f \n",C._Velocity);
+    step_startC=step_motor(Cstep_pin, step_startC,C.cycle(), &stepcount[0]);
+    step_startM=step_motor(Mstep_pin, step_startM,M.middle_cycle(&C._Velocity), &stepcount[1]);
+acc_pstart[0] = Change_Velocity(acc_pstart[0],&C._Velocity,&Velocity_initial[0], &new_vel[0],&Acc_length[0], &mode[0], &Cdir_pin); //(update timer place holder, updates class velocity variable, holds the starting velocity, desired new velocity, time it takes to update.
+
+    }
+/*
+pc.printf("stepcount[0] after acc1=%d \n",stepcount[0]);
+pc.printf("C.velocity after acc1=%f \n",C._Velocity);
+pc.printf("time after acc1 = %d \n",timekeep);
+*/
+
+
+stepcount[2]=0;
+
+
+/////////////////////////////////////////////////////////////middle region////////////////////////////////////////////////////
+step_startM = timekeep;
+step_startR = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+step_startC = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+stepcount[0]=0;
+
+
+while(stepcount[0]<=(M_length)*3333.33f-acc_comp[0]-acc_comp[1]+carraige_calibrate)// the added numbers are for the steps cause by the acc functions can predict now with math
+{//once we get exact dimensions it should be better
+
+step_startC=step_motor(Cstep_pin, step_startC,C.cycle(), &stepcount[0]);
+step_startM=step_motor(Mstep_pin, step_startM,M.middle_cycle(&C._Velocity),&stepcount[1]); //checks and adjusts the mandrel step options
+//step_start3=step_motor(11, step_start3,1000, &stepcount[3]);
+//step_start4=step_motor(12, step_start4,500, &stepcount[4]);
+
+//acc_pstartC = Change_Velocity(acc_pstartC,&C._velocity,&Velocity_initial, &new_vel,&Acc_length,&acccount, &mode, &Cdir_pin); //(update timer place holder, updates class velocity variable, holds the starting velocity, desired new velocity, time it takes to update.
+}
+//////////////////////////////////////////////acc2 change//////////////
+stepcount[0]=0;
+stepcount[2]=0;
+stepcount[1]=0;
+step_startM = timekeep;
+step_startR = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+step_startC = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+Velocity_Set(C_end_region_vel, &new_vel[0],&Velocity_initial[0],&C._Velocity,1000, &Acc_length[0], &mode[0], 0);
+/*
+pc.printf("stepcount[0] before acc2=%d \n",stepcount[0]);
+pc.printf("C.velocity before acc2=%f \n",C._Velocity);
+pc.printf("time before acc2 = %d \n",timekeep);
+*/
+acc_pstart[0]=timekeep;
+while(C._Velocity >=C_end_region_vel+0.001f)//is about (91) steps carriage and not 1 second idk why
+{
+   // pc.printf("C.velocity in loop=%f \n",C._Velocity);
+    step_startC=step_motor(Cstep_pin, step_startC,C.cycle(), &stepcount[0]);
+    step_startM=step_motor(Mstep_pin, step_startM,M.middle_cycle(&C._Velocity), &stepcount[1]);
+acc_pstart[0] = Change_Velocity(acc_pstart[0],&C._Velocity,&Velocity_initial[0], &new_vel[0],&Acc_length[0], &mode[0], &Cdir_pin); //(update timer place holder, updates class velocity variable, holds the starting velocity, desired new velocity, time it takes to update.
+    }
+    /*
+pc.printf("stepcount[0] after acc2=%d \n",stepcount[0]);
+pc.printf("C.velocity after acc2=%f \n",C._Velocity);
+pc.printf("time after acc2 = %d \n",timekeep);
+
+
+
+*/
+//////////////////////////////////////////////////////////////second end region//////////////////////////////////////////////////////
+/*
+pc.printf("stepcount[0] before end2=%d \n",stepcount[0]);
+pc.printf("C.velocity before end2=%f \n",C._Velocity);
+pc.printf("time before end2 = %d \n",timekeep);
+*/
+
+step_startR = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+step_startC = timekeep;//its important to reset these every so often else wierd errors apear. see book sept.9
+step_startM = timekeep;
+step_startF = timekeep;
+stepcount[0]=0;
+stepcount[1]=0;
+stepcount[2]=0;
+Rdir_pin = !Rdir_pin;
+while(stepcount[0]<=R._distanceC*3333.33f)//3333.33 for steps per meter
+{
+
+step_startC=step_motor(Cstep_pin, step_startC,C.cycle(), &stepcount[0]);
+step_startM=step_motor(Mstep_pin, step_startM,M.linear_end_cycle2(stepcount[0],C._Ccycle), &stepcount[1]); //checks and adjusts the mandrel step options
+step_startR=step_motor(Rstep_pin, step_startR,R.linear_end_cycle(C.cycle()), &stepcount[2]);
+step_startF=step_motor(Fstep_pin, step_startF,F.linear_end_cycle(stepcount[0],C._Ccycle), &stepcount[3]);
+
+}
+/*
+pc.printf("stepcount[0] after end2=%d \n",stepcount[0]);
+pc.printf("C.velocity after end2=%f \n",C._Velocity);
+pc.printf("time after end2 = %d \n",timekeep);
+*/
+passes++;
+
+//while(true){};
+}//end of linear loop
+
+pc.printf("end time = %d \n",timekeep);
+pc.printf("C step count last end= %d \n",stepcount[0]);
+pc.printf("M step count last end = %d \n",stepcount[1]);
+pc.printf("R step count last end= %d \n",stepcount[2]);
+
+    
+}
